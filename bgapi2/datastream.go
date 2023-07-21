@@ -6,12 +6,34 @@ package bgapi2
 #include "bgapi2_genicam/bgapi2_types.h"
 #include "bgapi2_genicam/bgapi2_genicam.h"
 #include <stdlib.h>
+
+extern void bufferEventHandlerWrapper(void* callbackOwner, BGAPI2_Buffer* pBuffer);
+
 */
 import "C"
-import "unsafe"
+import (
+	"sync"
+	"unsafe"
+)
+
+type BufferEventHandler func(dataStream *DataStream, buffer *Buffer, userObject any)
+
+var dataStreams = sync.Map{}
 
 type DataStream struct {
-	ptr *C.BGAPI2_DataStream
+	ptr          *C.BGAPI2_DataStream
+	userData     any
+	eventHandler BufferEventHandler
+}
+
+func getDataStreamFromCDataStream(ptr *C.BGAPI2_DataStream) *DataStream {
+	d := &DataStream{
+		ptr: ptr,
+	}
+
+	val, _ := dataStreams.LoadOrStore(ptr, d)
+
+	return val.(*DataStream)
 }
 
 func (d *DataStream) Open() error {
@@ -255,40 +277,76 @@ func (d *DataStream) DiscardAllBuffers() error {
 	return ResultToError(result)
 }
 
-func (d *DataStream) AnnounceBuffer(buffer Buffer) error {
+func (d *DataStream) AnnounceBuffer(buffer *Buffer) error {
 	result := C.BGAPI2_DataStream_AnnounceBuffer(d.ptr, buffer.ptr)
 	return ResultToError(result)
 }
 
-func (d *DataStream) RevokeBuffer(buffer Buffer) error {
+func (d *DataStream) RevokeBuffer(buffer *Buffer) error {
 	var userObj unsafe.Pointer
 	result := C.BGAPI2_DataStream_RevokeBuffer(d.ptr, buffer.ptr, &userObj)
 	return ResultToError(result)
 }
 
-func (d *DataStream) QueueBuffer(buffer Buffer) error {
+func (d *DataStream) QueueBuffer(buffer *Buffer) error {
 	result := C.BGAPI2_DataStream_QueueBuffer(d.ptr, buffer.ptr)
 	return ResultToError(result)
 }
 
 func (d *DataStream) GetFilledBuffer(timeout uint64) (*Buffer, error) {
-	var buffer Buffer
-	result := C.BGAPI2_DataStream_GetFilledBuffer(d.ptr, &buffer.ptr, C.bo_uint64(timeout))
+	var buffer *C.BGAPI2_Buffer
+	result := C.BGAPI2_DataStream_GetFilledBuffer(d.ptr, &buffer, C.bo_uint64(timeout))
 	err := ResultToError(result)
 	if err != nil {
 		return nil, err
 	}
 
-	buffer.handle, err = buffer.getUserPtrHandle()
-	if err != nil {
-		return nil, err
-	}
-
-	return &buffer, nil
+	return getBufferFromCBuffer(buffer)
 }
 
 func (d *DataStream) CancelGetFilledBuffer() error {
 	result := C.BGAPI2_DataStream_CancelGetFilledBuffer(d.ptr)
+	return ResultToError(result)
+}
+
+func (d *DataStream) GetBufferId(index uint) (*Buffer, error) {
+	var buffer *C.BGAPI2_Buffer
+	result := C.BGAPI2_DataStream_GetBufferID(d.ptr, C.bo_uint(index), &buffer)
+	err := ResultToError(result)
+	if err != nil {
+		return nil, err
+	}
+
+	return getBufferFromCBuffer(buffer)
+}
+
+func (d *DataStream) RegisterNewBufferEventHandler(handler BufferEventHandler, userData any) error {
+	d.userData = userData
+	d.eventHandler = handler
+	result := C.BGAPI2_DataStream_RegisterNewBufferEventHandler(d.ptr, unsafe.Pointer(d.ptr),
+		(C.BGAPI2_NewBufferEventHandler)(C.bufferEventHandlerWrapper))
+
+	return ResultToError(result)
+}
+
+//export bufferEventHandler
+//go:nocheckptr go:nosplit
+func bufferEventHandler(callBackOwner unsafe.Pointer, pBuffer unsafe.Pointer) {
+	d := getDataStreamFromCDataStream((*C.BGAPI2_DataStream)(callBackOwner))
+	buffer, _ := getBufferFromCBuffer((*C.BGAPI2_Buffer)(pBuffer))
+
+	if d.eventHandler != nil {
+		d.eventHandler(d, buffer, d.userData)
+	}
+
+}
+
+func (d *DataStream) DeleteBufferEventHandler() error {
+	result := C.BGAPI2_DataStream_RegisterNewBufferEventHandler(d.ptr, unsafe.Pointer(nil),
+		(C.BGAPI2_NewBufferEventHandler)(nil))
+	d.eventHandler = nil
+	d.userData = nil
+
 	return ResultToError(result)
 }
 

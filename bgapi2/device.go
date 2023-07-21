@@ -8,10 +8,16 @@ package bgapi2
 #include <stdlib.h>
 */
 import "C"
-import "unsafe"
+import (
+	"unsafe"
+)
 
 type Device struct {
 	ptr *C.BGAPI2_Device
+}
+
+type DeviceEvent struct {
+	ptr *C.BGAPI2_DeviceEvent
 }
 
 func (d *Device) Open() error {
@@ -44,7 +50,7 @@ func (d *Device) GetDataStream(index uint) (*DataStream, error) {
 		return nil, err
 	}
 
-	return &DataStream{dataStream}, err
+	return getDataStreamFromCDataStream(dataStream), err
 }
 
 func (d *Device) GetNumDataStreams() (uint, error) {
@@ -65,15 +71,15 @@ func (d *Device) Close() error {
 func (d *Device) GetNode(name string) (*Node, error) {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	var node *C.BGAPI2_Node
+	node := &Node{}
 
-	result := C.BGAPI2_Device_GetNode(d.ptr, cName, &node)
+	result := C.BGAPI2_Device_GetNode(d.ptr, cName, &node.ptr)
 	err := ResultToError(result)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Node{node}, err
+	return node, err
 }
 
 func (d *Device) GetNodeTree() (*NodeMap, error) {
@@ -97,6 +103,14 @@ func (d *Device) GetNodeList() (*NodeMap, error) {
 
 	return &NodeMap{list}, nil
 }
+
+//BGAPI2_Device_SetDeviceEventMode
+//BGAPI2_Device_GetDeviceEventMode
+//BGAPI2_CreateDeviceEvent
+//BGAPI2_ReleaseDeviceEvent
+//BGAPI2_Device_GetDeviceEvent
+//BGAPI2_Device_CancelGetDeviceEvent
+//BGAPI2_Device_RegisterDeviceEventHandler
 
 func (d *Device) GetPayloadSize() (uint64, error) {
 	var payloadSize C.bo_uint64

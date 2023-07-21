@@ -53,6 +53,28 @@ func (i *Interface) GetNumDevices() (uint, error) {
 	return uint(value), nil
 }
 
+func (i *Interface) GetDevices() ([]*Device, error) {
+	_, err := i.UpdateDeviceList(timeout)
+	if err != nil {
+		return nil, err
+	}
+
+	numDevices, err := i.GetNumDevices()
+	if err != nil {
+		return nil, err
+	}
+
+	devices := make([]*Device, numDevices)
+	for index, _ := range devices {
+		devices[index], err = i.GetDevice(uint(index))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return devices, nil
+}
+
 func (i *Interface) GetParent() (*System, error) {
 	var parent *C.BGAPI2_System
 

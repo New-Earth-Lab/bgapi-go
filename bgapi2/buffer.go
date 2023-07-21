@@ -9,80 +9,79 @@ package bgapi2
 */
 import "C"
 import (
-	"runtime/cgo"
+	"fmt"
+	"sync"
 	"unsafe"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
 )
 
+var buffers = sync.Map{}
+
 type Buffer struct {
-	ptr    *C.BGAPI2_Buffer
-	buffer *atomic.Buffer
-	handle cgo.Handle
+	ptr        *C.BGAPI2_Buffer
+	userObject any
 }
 
 func CreateBuffer() (*Buffer, error) {
-	var buffer *C.BGAPI2_Buffer
+	buffer := new(Buffer)
 
-	handle := cgo.NewHandle(nil)
-	result := C.BGAPI2_CreateBuffer(&buffer)
+	result := C.BGAPI2_CreateBuffer(&buffer.ptr)
 	err := ResultToError(result)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Buffer{
-		ptr:    buffer,
-		handle: handle,
-	}, nil
+	buffers.Store(buffer.ptr, buffer)
+
+	return buffer, nil
+}
+
+func getBufferFromCBuffer(ptr *C.BGAPI2_Buffer) (*Buffer, error) {
+	v, ok := buffers.Load(ptr)
+	if !ok {
+		return nil, fmt.Errorf("bgapi2: Unable to get buffer")
+	}
+
+	buffer := v.(*Buffer)
+
+	return buffer, nil
 }
 
 func CreateBufferWithUserPtr(userObject any) (*Buffer, error) {
-	var buffer *C.BGAPI2_Buffer
-	handle := cgo.NewHandle(userObject)
+	buffer := new(Buffer)
 
-	result := C.BGAPI2_CreateBufferWithUserPtr(&buffer, unsafe.Pointer(handle))
+	result := C.BGAPI2_CreateBufferWithUserPtr(&buffer.ptr, unsafe.Pointer(nil))
 	err := ResultToError(result)
 	if err != nil {
-		handle.Delete()
 		return nil, err
 	}
 
-	return &Buffer{
-		ptr:    buffer,
-		handle: handle,
-	}, nil
+	buffers.Store(buffer.ptr, buffer)
+
+	return buffer, nil
 }
 
 func CreateBufferWithOptimizedSize(userObject any) (*Buffer, error) {
-	var buffer *C.BGAPI2_Buffer
-	handle := cgo.NewHandle(userObject)
+	buffer := new(Buffer)
 
-	result := C.BGAPI2_CreateBufferWithOptimizedSize(&buffer, unsafe.Pointer(handle))
+	result := C.BGAPI2_CreateBufferWithOptimizedSize(&buffer.ptr, unsafe.Pointer(nil))
 	err := ResultToError(result)
 	if err != nil {
-		handle.Delete()
 		return nil, err
 	}
 
-	return &Buffer{
-		ptr:    buffer,
-		handle: handle,
-	}, nil
+	buffers.Store(buffer.ptr, buffer)
+
+	return buffer, nil
 }
 
 func (b *Buffer) Delete() error {
 	var userObj unsafe.Pointer
 
+	buffers.Delete(b.ptr)
 	result := C.BGAPI2_DeleteBuffer(b.ptr, &userObj)
-	err := ResultToError(result)
-	if err != nil {
-		return err
-	}
-
-	b.handle.Delete()
-
-	return nil
+	return ResultToError(result)
 }
 
 func (b *Buffer) GetNode(name string) (*Node, error) {
@@ -158,9 +157,7 @@ func (b *Buffer) GetMemPtr() (unsafe.Pointer, error) {
 }
 
 func (b *Buffer) GetMemBuffer() (*atomic.Buffer, error) {
-	var value unsafe.Pointer
-	result := C.BGAPI2_Buffer_GetMemPtr(b.ptr, &value)
-	err := ResultToError(result)
+	ptr, err := b.GetMemPtr()
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +167,26 @@ func (b *Buffer) GetMemBuffer() (*atomic.Buffer, error) {
 		return nil, err
 	}
 
-	return b.buffer.Wrap(value, int32(size)), nil
+	return atomic.MakeBuffer(ptr, size), nil
+}
+
+func (b *Buffer) GetMemImageBuffer() (*atomic.Buffer, error) {
+	ptr, err := b.GetMemPtr()
+	if err != nil {
+		return nil, err
+	}
+
+	size, err := b.GetImageLength()
+	if err != nil {
+		return nil, err
+	}
+
+	offset, err := b.GetImageOffset()
+	if err != nil {
+		return nil, err
+	}
+
+	return atomic.MakeBuffer(unsafe.Add(ptr, offset), size), nil
 }
 
 func (b *Buffer) GetMemSize() (uint64, error) {
@@ -184,26 +200,8 @@ func (b *Buffer) GetMemSize() (uint64, error) {
 	return uint64(value), nil
 }
 
-func (b *Buffer) GetUserPtr() (any, error) {
-	var value unsafe.Pointer
-	result := C.BGAPI2_Buffer_GetUserPtr(b.ptr, &value)
-	err := ResultToError(result)
-	if err != nil {
-		return 0, err
-	}
-
-	return (cgo.Handle)(value).Value(), nil
-}
-
-func (b *Buffer) getUserPtrHandle() (cgo.Handle, error) {
-	var value unsafe.Pointer
-	result := C.BGAPI2_Buffer_GetUserPtr(b.ptr, &value)
-	err := ResultToError(result)
-	if err != nil {
-		return 0, err
-	}
-
-	return (cgo.Handle)(value), nil
+func (b *Buffer) GetUserObject() (any, error) {
+	return b.userObject, nil
 }
 
 func (b *Buffer) GetTimestamp() (uint64, error) {
@@ -362,7 +360,7 @@ func (b *Buffer) GetImagePresent() (bool, error) {
 
 func (b *Buffer) GetImageOffset() (uint64, error) {
 	var value C.bo_uint64
-	result := C.BGAPI2_Buffer_GetImageLength(b.ptr, &value)
+	result := C.BGAPI2_Buffer_GetImageOffset(b.ptr, &value)
 	err := ResultToError(result)
 	if err != nil {
 		return 0, err
@@ -373,7 +371,7 @@ func (b *Buffer) GetImageOffset() (uint64, error) {
 
 func (b *Buffer) GetImageLength() (uint64, error) {
 	var value C.bo_uint64
-	result := C.BGAPI2_Buffer_GetImageOffset(b.ptr, &value)
+	result := C.BGAPI2_Buffer_GetImageLength(b.ptr, &value)
 	err := ResultToError(result)
 	if err != nil {
 		return 0, err
@@ -472,5 +470,5 @@ func (b *Buffer) GetParent() (*DataStream, error) {
 		return nil, err
 	}
 
-	return &DataStream{parent}, nil
+	return getDataStreamFromCDataStream(parent), nil
 }

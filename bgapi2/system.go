@@ -12,6 +12,8 @@ import (
 	"unsafe"
 )
 
+const timeout = 100
+
 type System struct {
 	ptr *C.BGAPI2_System
 }
@@ -66,6 +68,28 @@ func GetSystem(index uint) (*System, error) {
 	return &System{system}, nil
 }
 
+func GetSystems() ([]*System, error) {
+	err := UpdateSystemList()
+	if err != nil {
+		return nil, err
+	}
+
+	numSystems, err := GetNumSystems()
+	if err != nil {
+		return nil, err
+	}
+
+	systems := make([]*System, numSystems)
+	for i, _ := range systems {
+		systems[i], err = GetSystem(uint(i))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return systems, nil
+}
+
 func (s *System) Open() error {
 	result := C.BGAPI2_System_Open(s.ptr)
 	return ResultToError(result)
@@ -103,6 +127,28 @@ func (s *System) GetNumInterfaces() (uint, error) {
 		return 0, err
 	}
 	return uint(value), nil
+}
+
+func (s *System) GetInterfaces() ([]*Interface, error) {
+	_, err := s.UpdateInterfaceList(timeout)
+	if err != nil {
+		return nil, err
+	}
+
+	numInterfaces, err := s.GetNumInterfaces()
+	if err != nil {
+		return nil, err
+	}
+
+	interfaces := make([]*Interface, numInterfaces)
+	for i, _ := range interfaces {
+		interfaces[i], err = s.GetInterface(uint(i))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return interfaces, nil
 }
 
 func (s *System) Close() error {
